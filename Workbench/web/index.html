@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unified Engineering Workbench</title>
+<style>
+:root{--bg:#f4f6f8;--card:#fff;--ink:#1c2430;--mut:#5b6675;--acc:#1f6feb;--bad:#b42318;--ok:#067647;--line:#d5dbe3}
+@media (prefers-color-scheme:dark){:root{--bg:#10151b;--card:#1a212a;--ink:#e6ebf1;--mut:#9aa7b6;--acc:#58a6ff;--bad:#ff8b81;--ok:#56d364;--line:#2b3542}}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;font:14px/1.45 system-ui,Segoe UI,sans-serif;background:var(--bg);color:var(--ink);padding-bottom:48px}
+header{padding:12px 20px;border-bottom:1px solid var(--line);background:var(--card)}
+h1{font-size:18px;margin:0 0 8px}
+nav button{font:inherit;border:1px solid var(--line);background:var(--bg);color:var(--ink);padding:6px 14px;margin-right:4px;border-radius:6px;cursor:pointer}
+nav button.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+main{padding:16px 20px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:16px}
+h2{font-size:15px;margin:0 0 8px}
+button.act{font:inherit;padding:5px 11px;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:6px;cursor:pointer;margin:2px 4px 2px 0}
+button.act:hover{border-color:var(--acc)}
+input[type=number]{width:110px;font:inherit;padding:4px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:4px}
+canvas{width:100%;height:auto;border-radius:6px;display:block;margin:8px 0;cursor:grab;background:#0f1318}
+canvas.plain{cursor:default}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{border-bottom:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top}
+.mut{color:var(--mut);font-size:12px}
+.banner{background:#fff4ce;color:#5c4400;padding:8px 12px;border-radius:6px;margin-bottom:10px;font-weight:600}
+pre{background:var(--bg);padding:8px;border-radius:6px;max-height:220px;overflow:auto;white-space:pre-wrap;font-size:12px}
+#status{position:fixed;left:0;right:0;bottom:0;padding:10px 20px;background:var(--card);border-top:1px solid var(--line)}
+#status.busy{color:var(--acc)} #status.ok{color:var(--ok)} #status.bad{color:var(--bad);font-weight:600}
+.row{display:flex;gap:16px;align-items:flex-start}
+</style>
+</head>
+<body>
+<header>
+  <h1>Unified Engineering Workbench</h1>
+  <nav>
+    <button class="on" data-tab="geo">Geometry</button>
+    <button data-tab="fem">Thermal Analysis</button>
+    <button data-tab="perf">Performance</button>
+    <button data-tab="hw">Hardware</button>
+  </nav>
+</header>
+
+<main>
+<section id="tab-geo">
+  <div class="grid">
+    <div class="card">
+      <h2>STL mesh (ASCII STL, units: metres by convention)</h2>
+      <input type="file" id="stlFile" accept=".stl">
+      <button class="act" id="stlSample">Load sample cube</button>
+      <button class="act" id="stlFit">Fit to view</button>
+      <canvas id="stlCv" width="700" height="480"></canvas>
+      <div class="mut">Drag: rotate &middot; Shift+drag or right-drag: pan &middot; Wheel: zoom</div>
+      <p id="stlInfo" class="mut">No STL loaded.</p>
+    </div>
+    <div class="card">
+      <h2>Nodal temperature point cloud (CSV: node_id,x_m,y_m,z_m,temperature_C)</h2>
+      <input type="file" id="csvFile" accept=".csv">
+      <button class="act" id="csvSample">Load synthetic sample</button>
+      <button class="act" id="csvFit">Fit to view</button>
+      <div class="row">
+        <canvas id="cloudCv" width="640" height="480"></canvas>
+        <canvas id="legendCv" class="plain" width="90" height="300" style="width:90px"></canvas>
+      </div>
+      <div class="mut">Click a point to inspect the node. Same mouse controls as the mesh view.</div>
+      <p id="cloudInfo" class="mut">No CSV loaded.</p>
+      <p id="nodeInfo"><b>Selected node:</b> none</p>
+    </div>
+  </div>
+</section>
+
+<section id="tab-fem" hidden>
+  <div class="card">
+    <h2>1D steady-state thermal FEM: rod, L = 1 m, k = 10 W/(m K), q = 10,000 W/m&sup3;, T(0) = 100 &deg;C, T(L) = 20 &deg;C</h2>
+    <label>Elements N (1-100000): <input type="number" id="femN" value="10"></label>
+    <button class="act" id="femSolve">Solve this N</button>
+    <button class="act" id="femConv">Run convergence (N = 10, 20, 40, 80)</button>
+    <button class="act" id="femExport">Export CSV</button>
+    <canvas id="femCv" class="plain" width="900" height="360"></canvas>
+    <div class="mut">Curves are the C++ FE solution; the dashed line is the analytical solution drawn in the browser. Error figures come from the C++ core.</div>
+    <table id="femTable"><thead><tr><th>N</th><th>h (m)</th><th>Max nodal error (&deg;C)</th><th>Max midpoint error (&deg;C)</th><th>Observed order</th></tr></thead><tbody></tbody></table>
+  </div>
+</section>
+
+<section id="tab-perf" hidden>
+  <div class="card">
+    <h2>Serial vs. CPU-parallel batch of independent thermal solves</h2>
+    <label>Cases (1-20000): <input type="number" id="pCount" value="500"></label>
+    <label>&nbsp; Elements per case (10-200000): <input type="number" id="pN" value="5000"></label>
+    <button class="act" id="pRun">Run benchmark</button>
+    <p class="mut">Seed 42, 1 warm-up + 5 measured runs, median. Cases x elements must be at most 40,000,000. The run always completes before results appear (the page stays responsive meanwhile). Speedup = T1 / Tp, where T1 is the 1-worker time of the parallel code.</p>
+    <p id="pInfo" class="mut"></p>
+    <table id="pTable"><thead><tr><th>Workers</th><th>Median time (s)</th><th>Speedup</th><th>Efficiency</th><th>Max |serial - parallel| (&deg;C)</th></tr></thead><tbody></tbody></table>
+  </div>
+</section>
+
+<section id="tab-hw" hidden>
+  <div class="card">
+    <div class="banner">SIMULATED devices: no hardware is connected or touched.</div>
+    <button class="act" id="devRefresh">Refresh / discover</button>
+    <table id="devTable"><thead><tr><th>ID</th><th>Type</th><th>Description</th><th>Capabilities</th><th>State</th><th>Actions</th></tr></thead><tbody id="devBody"></tbody></table>
+    <p class="mut">"Connect (1 timeout)" injects one simulated timeout, then the host retries and recovers. "Connect (5 timeouts)" exhausts the 3 attempts and fails cleanly while the app stays usable.</p>
+    <pre id="devLog">(log)</pre>
+  </div>
+</section>
+</main>
+<div id="status" class="ok">Ready.</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const state = {mesh: null, cloud: null, sel: -1, fem: null};
+
+function setStatus(msg, kind) { const s = $('status'); s.textContent = msg; s.className = kind || ''; }
+async function api(path, opts) {
+  let r;
+  try { r = await fetch(path, opts); }
+  catch (e) { throw new Error('Cannot reach the backend. Is workbench_server.exe still running?'); }
+  let j = null;
+  try { j = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error((j && j.error) || ('Server error (HTTP ' + r.status + ')'));
+  if (j === null) throw new Error('The server sent an unreadable response');
+  return j;
+}
+async function run(msg, fn) {
+  setStatus(msg + ' ...', 'busy');
+  try { setStatus((await fn()) || 'Done', 'ok'); }
+  catch (e) { setStatus('Error: ' + e.message, 'bad'); }
+}
+function intField(id, lo, hi, name) {
+  const t = $(id).value.trim();
+  const v = Number(t);
+  if (t === '' || !Number.isInteger(v) || v < lo || v > hi)
+    throw new Error(name + ' must be a whole number between ' + lo + ' and ' + hi);
+  return v;
+}
+
+/* ---------- generic 3D canvas view (orthographic, own projection) ---------- */
+function View(canvas, drawFn) {
+  this.cv = canvas; this.ctx = canvas.getContext('2d'); this.drawFn = drawFn;
+  this.rx = -0.5; this.ry = 0.6; this.zoom = 1; this.px = 0; this.py = 0;
+  this.c = [0, 0, 0]; this.r = 1; this.moved = false;
+  const self = this; let drag = null;
+  canvas.addEventListener('mousedown', e => { drag = {x: e.clientX, y: e.clientY, pan: e.shiftKey || e.button === 2}; self.moved = false; });
+  window.addEventListener('mouseup', () => { drag = null; });
+  window.addEventListener('mousemove', e => {
+    if (!drag) return;
+    const k = canvas.width / canvas.getBoundingClientRect().width;
+    const dx = (e.clientX - drag.x) * k, dy = (e.clientY - drag.y) * k;
+    if (Math.abs(dx) + Math.abs(dy) > 2) self.moved = true;
+    drag.x = e.clientX; drag.y = e.clientY;
+    if (drag.pan) { self.px += dx; self.py += dy; } else { self.ry += dx * 0.01; self.rx += dy * 0.01; }
+    self.render();
+  });
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    self.zoom = Math.min(Math.max(self.zoom * Math.exp(-e.deltaY * 0.001), 0.05), 200);
+    self.render();
+  }, {passive: false});
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
+}
+View.prototype.fit = function (bmin, bmax) {
+  this.c = [0, 1, 2].map(i => (bmin[i] + bmax[i]) / 2);
+  this.r = Math.max(Math.hypot(bmax[0] - bmin[0], bmax[1] - bmin[1], bmax[2] - bmin[2]) / 2, 1e-12);
+  this.zoom = 1; this.px = 0; this.py = 0; this.rx = -0.5; this.ry = 0.6;
+};
+View.prototype.scale = function () { return this.zoom * Math.min(this.cv.width, this.cv.height) * 0.45 / this.r; };
+View.prototype.rot = function (x, y, z) {
+  const X = x - this.c[0], Y = y - this.c[1], Z = z - this.c[2];
+  const x1 = this.cy * X + this.sy * Z, z1 = -this.sy * X + this.cy * Z;
+  return [x1, this.cx * Y - this.sx * z1, this.sx * Y + this.cx * z1];
+};
+View.prototype.render = function () {
+  this.cy = Math.cos(this.ry); this.sy = Math.sin(this.ry); this.cx = Math.cos(this.rx); this.sx = Math.sin(this.rx);
+  this.ctx.fillStyle = '#0f1318'; this.ctx.fillRect(0, 0, this.cv.width, this.cv.height);
+  this.drawFn(this);
+};
+
+function drawStl(v) {
+  const m = state.mesh; if (!m) return;
+  const t = m.v, n = t.length / 9, ctx = v.ctx, s = v.scale();
+  const ox = v.cv.width / 2 + v.px, oy = v.cv.height / 2 + v.py;
+  const R = new Float64Array(n * 9), items = new Array(n);
+  for (let i = 0; i < n; i++) {
+    let d = 0;
+    for (let k = 0; k < 3; k++) {
+      const o = i * 9 + k * 3, r = v.rot(t[o], t[o + 1], t[o + 2]);
+      R[o] = r[0]; R[o + 1] = r[1]; R[o + 2] = r[2]; d += r[2];
+    }
+    items[i] = [d / 3, i];
+  }
+  items.sort((a, b) => a[0] - b[0]);            // painter's algorithm: far to near
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+  for (const it of items) {
+    const o = it[1] * 9;
+    const ux = R[o + 3] - R[o], uy = R[o + 4] - R[o + 1], uz = R[o + 5] - R[o + 2];
+    const wx = R[o + 6] - R[o], wy = R[o + 7] - R[o + 1], wz = R[o + 8] - R[o + 2];
+    const nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+    const sh = 0.25 + 0.75 * Math.abs(nz / (Math.hypot(nx, ny, nz) || 1));
+    ctx.fillStyle = 'rgb(' + ((60 * sh) | 0) + ',' + ((130 * sh) | 0) + ',' + ((220 * sh) | 0) + ')';
+    ctx.beginPath();
+    ctx.moveTo(ox + R[o] * s, oy - R[o + 1] * s);
+    ctx.lineTo(ox + R[o + 3] * s, oy - R[o + 4] * s);
+    ctx.lineTo(ox + R[o + 6] * s, oy - R[o + 7] * s);
+    ctx.closePath(); ctx.fill();
+    if (n <= 20000) ctx.stroke();
+  }
+}
+
+const cmap = t => 'hsl(' + ((1 - t) * 240 | 0) + ',90%,50%)';
+function drawCloud(v) {
+  const c = state.cloud; if (!c) return;
+  const p = c.p, n = p.length / 5, ctx = v.ctx, s = v.scale();
+  const ox = v.cv.width / 2 + v.px, oy = v.cv.height / 2 + v.py;
+  for (let i = 0; i < n; i++) {
+    const r = v.rot(p[i * 5], p[i * 5 + 1], p[i * 5 + 2]);
+    ctx.fillStyle = c.col[i];
+    ctx.fillRect(ox + r[0] * s - 2, oy - r[1] * s - 2, 4, 4);
+  }
+  if (state.sel >= 0) {
+    const i = state.sel, r = v.rot(p[i * 5], p[i * 5 + 1], p[i * 5 + 2]);
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(ox + r[0] * s, oy - r[1] * s, 8, 0, 6.2832); ctx.stroke(); ctx.lineWidth = 1;
+  }
+}
+const stlView = new View($('stlCv'), drawStl);
+const cloudView = new View($('cloudCv'), drawCloud);
+
+function drawLegend(tmin, tmax) {
+  const cv = $('legendCv'), g = cv.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
+  const top = 28, h = 240;
+  for (let y = 0; y < h; y++) { g.fillStyle = cmap(1 - y / (h - 1)); g.fillRect(8, top + y, 22, 1); }
+  g.fillStyle = '#111'; g.font = '12px sans-serif';
+  g.fillText('T (\u00B0C)', 8, 16);
+  [0, 0.5, 1].forEach(f => { g.fillText((tmax - f * (tmax - tmin)).toFixed(1), 34, top + 4 + f * (h - 1)); });
+}
+
+async function post(path, text) {
+  return api(path, {method: 'POST', headers: {'Content-Type': 'text/plain'}, body: text});
+}
+async function loadStl(text) {
+  const j = await post('/api/stl', text);
+  state.mesh = {v: new Float32Array(j.v)};
+  stlView.fit(j.bmin, j.bmax); stlView.render();
+  $('stlInfo').textContent = j.triangles + ' triangles' + (j.shown < j.triangles ? ' (showing ' + j.shown + ')' : '') +
+    '. Bounding box min (' + j.bmin.map(x => +x.toFixed(4)) + ') max (' + j.bmax.map(x => +x.toFixed(4)) + ') m.';
+}
+async function loadCsv(text) {
+  const j = await post('/api/csv', text);
+  const p = new Float64Array(j.p), n = p.length / 5, col = new Array(n);
+  const span = j.tmax - j.tmin;
+  for (let i = 0; i < n; i++) col[i] = cmap(span > 0 ? (p[i * 5 + 3] - j.tmin) / span : 0.5);
+  state.cloud = {p, col}; state.sel = -1;
+  cloudView.fit(j.bmin, j.bmax); cloudView.render(); drawLegend(j.tmin, j.tmax);
+  $('cloudInfo').textContent = j.nodes + ' nodes' + (j.shown < j.nodes ? ' (showing ' + j.shown + ')' : '') +
+    '. Temperature ' + j.tmin.toFixed(2) + ' to ' + j.tmax.toFixed(2) + ' \u00B0C.';
+  $('nodeInfo').innerHTML = '<b>Selected node:</b> none';
+}
+function fileLoader(inputId, loader) {
+  $(inputId).onchange = e => {
+    const f = e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    run('Parsing ' + f.name, async () => {
+      if (f.size === 0) throw new Error('File is empty (0 bytes)');
+      if (f.size > 200 * 1024 * 1024) throw new Error('File is larger than the 200 MB limit');
+      await loader(await f.text());
+      return 'Loaded ' + f.name;
+    });
+  };
+}
+fileLoader('stlFile', loadStl);
+fileLoader('csvFile', loadCsv);
+$('stlSample').onclick = () => run('Loading sample cube', async () => {
+  const r = await fetch('/data/sample_cube.stl'); if (!r.ok) throw new Error('sample_cube.stl not found in data/');
+  await loadStl(await r.text()); return 'Loaded sample cube';
+});
+$('csvSample').onclick = () => run('Loading synthetic sample', async () => {
+  const r = await fetch('/data/sample_nodes_synthetic.csv'); if (!r.ok) throw new Error('sample CSV not found in data/');
+  await loadCsv(await r.text()); return 'Loaded SYNTHETIC sample (not a real ANSYS export)';
+});
+$('stlFit').onclick = () => { if (state.mesh) { stlView.zoom = 1; stlView.px = 0; stlView.py = 0; stlView.render(); } };
+$('csvFit').onclick = () => { cloudView.zoom = 1; cloudView.px = 0; cloudView.py = 0; cloudView.render(); };
+
+$('cloudCv').addEventListener('click', e => {
+  if (cloudView.moved || !state.cloud) return;
+  const cv = $('cloudCv'), rect = cv.getBoundingClientRect(), k = cv.width / rect.width;
+  const mx = (e.clientX - rect.left) * k, my = (e.clientY - rect.top) * k;
+  const p = state.cloud.p, n = p.length / 5, s = cloudView.scale();
+  const ox = cv.width / 2 + cloudView.px, oy = cv.height / 2 + cloudView.py;
+  let best = -1, bd = 14 * 14, bz = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const r = cloudView.rot(p[i * 5], p[i * 5 + 1], p[i * 5 + 2]);
+    const d = (ox + r[0] * s - mx) ** 2 + (oy - r[1] * s - my) ** 2;
+    if (d < bd || (d === bd && r[2] > bz)) { bd = d; best = i; bz = r[2]; }
+  }
+  state.sel = best; cloudView.render();
+  if (best < 0) { $('nodeInfo').innerHTML = '<b>Selected node:</b> none (click closer to a point)'; return; }
+  $('nodeInfo').textContent = 'Selected node ' + p[best * 5 + 4] + ': x = ' + p[best * 5].toFixed(5) + ' m, y = ' +
+    p[best * 5 + 1].toFixed(5) + ' m, z = ' + p[best * 5 + 2].toFixed(5) + ' m, T = ' + p[best * 5 + 3].toFixed(3) + ' \u00B0C';
+});
+
+/* ---------- Thermal Analysis ---------- */
+function plot(cv, series, xl, yl) {
+  const g = cv.getContext('2d'), W = cv.width, H = cv.height, L = 90, R = 20, T = 20, B = 55;
+  g.fillStyle = '#fff'; g.fillRect(0, 0, W, H);
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const s of series) for (let i = 0; i < s.x.length; i++) {
+    x0 = Math.min(x0, s.x[i]); x1 = Math.max(x1, s.x[i]); y0 = Math.min(y0, s.y[i]); y1 = Math.max(y1, s.y[i]);
+  }
+  const pad = (y1 - y0) * 0.05 || 1; y0 -= pad; y1 += pad;
+  const X = x => L + (x - x0) / (x1 - x0) * (W - L - R), Y = y => H - B - (y - y0) / (y1 - y0) * (H - T - B);
+  g.strokeStyle = '#999'; g.fillStyle = '#222'; g.font = '12px sans-serif'; g.lineWidth = 1;
+  for (let i = 0; i <= 5; i++) {
+    const xv = x0 + (x1 - x0) * i / 5, yv = y0 + (y1 - y0) * i / 5;
+    g.beginPath(); g.moveTo(X(xv), T); g.lineTo(X(xv), H - B); g.strokeStyle = '#e3e3e3'; g.stroke();
+    g.beginPath(); g.moveTo(L, Y(yv)); g.lineTo(W - R, Y(yv)); g.stroke();
+    g.fillText(xv.toFixed(2), X(xv) - 14, H - B + 16); g.fillText(yv.toFixed(1), 8, Y(yv) + 4);
+  }
+  g.strokeStyle = '#444'; g.strokeRect(L, T, W - L - R, H - T - B);
+  g.font = '13px sans-serif'; g.fillText(xl, (W + L) / 2 - 30, H - 12);
+  g.save(); g.translate(14, (H + T) / 2 + 40); g.rotate(-Math.PI / 2); g.fillText(yl, 0, 0); g.restore();
+  series.forEach((s, k) => {
+    g.strokeStyle = s.color; g.lineWidth = s.w || 2; g.setLineDash(s.dash || []);
+    g.beginPath(); s.x.forEach((xv, i) => i ? g.lineTo(X(xv), Y(s.y[i])) : g.moveTo(X(xv), Y(s.y[i]))); g.stroke();
+    g.setLineDash([]); g.fillStyle = s.color; g.fillRect(W - 210, T + 10 + k * 18, 18, 3);
+    g.fillStyle = '#222'; g.font = '12px sans-serif'; g.fillText(s.name, W - 186, T + 15 + k * 18);
+  });
+  g.lineWidth = 1;
+}
+const colors = ['#1f77b4', '#2ca02c', '#ff7f0e', '#9467bd'];
+function showFem(runs) {
+  state.fem = runs;
+  // Analytical curve for plotting only: T = 100 - 80x + 500x(1-x) (q/(2k) = 500 for this problem)
+  const ex = {x: [], y: [], name: 'Exact', color: '#d62728', dash: [6, 4], w: 2};
+  for (let i = 0; i <= 200; i++) { const x = i / 200; ex.x.push(x); ex.y.push(100 - 80 * x + 500 * x * (1 - x)); }
+  const series = [ex].concat(runs.map((r, i) => ({x: r.x_m, y: r.T_fe_C, name: 'FE, N = ' + r.N, color: colors[i % 4], w: 1.5})));
+  plot($('femCv'), series, 'x (m)', 'Temperature (\u00B0C)');
+  const tb = $('femTable').tBodies[0]; tb.textContent = '';
+  runs.forEach((r, i) => {
+    const tr = tb.insertRow();
+    const order = i ? Math.log2(runs[i - 1].max_midpoint_error_C / r.max_midpoint_error_C).toFixed(3) : '-';
+    [r.N, r.h_m, r.max_nodal_error_C.toPrecision(4), r.max_midpoint_error_C.toPrecision(6), order]
+      .forEach(v => { tr.insertCell().textContent = v; });
+  });
+}
+$('femSolve').onclick = () => run('Solving', async () => {
+  const N = intField('femN', 1, 100000, 'N');
+  const r = await api('/api/fem?N=' + N); showFem([r]);
+  return 'Solved N = ' + N + ', max midpoint error ' + r.max_midpoint_error_C.toPrecision(5) + ' \u00B0C';
+});
+$('femConv').onclick = () => run('Running convergence study', async () => {
+  const j = await api('/api/convergence'); showFem(j.runs); return 'Convergence study done';
+});
+$('femExport').onclick = () => {
+  if (!state.fem) { setStatus('Error: nothing to export yet. Run a solve first.', 'bad'); return; }
+  let csv = 'N,x_m,T_fe_C,T_exact_C\n';
+  for (const r of state.fem) r.x_m.forEach((x, i) => { csv += r.N + ',' + x + ',' + r.T_fe_C[i] + ',' + r.T_exact_C[i] + '\n'; });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], {type: 'text/csv'})); a.download = 'fem_profiles.csv'; a.click();
+  setStatus('Exported fem_profiles.csv', 'ok');
+};
+
+/* ---------- Performance ---------- */
+$('pRun').onclick = () => {
+  const btn = $('pRun');
+  run('Running benchmark (this can take a while)', async () => {
+    const count = intField('pCount', 1, 20000, 'Cases'), N = intField('pN', 10, 200000, 'Elements per case');
+    btn.disabled = true;
+    try {
+      const j = await api('/api/bench?count=' + count + '&N=' + N);
+      $('pInfo').textContent = 'Logical CPUs: ' + j.logical_cpus + '. Serial median: ' + j.serial_median_s.toFixed(4) +
+        ' s. ' + j.cases + ' cases x ' + j.elements + ' elements, seed ' + j.seed + ', median of ' + j.reps + ' runs.';
+      const tb = $('pTable').tBodies[0]; tb.textContent = '';
+      for (const r of j.rows) {
+        const tr = tb.insertRow();
+        [r.workers, r.median_s.toFixed(4), r.speedup.toFixed(3), r.efficiency.toFixed(3),
+         r.max_abs_diff_C + (r.max_abs_diff_C <= 1e-8 ? '  (OK, <= 1e-8)' : '  (FAIL)')]
+          .forEach(v => { tr.insertCell().textContent = v; });
+      }
+      return 'Benchmark finished';
+    } finally { btn.disabled = false; }
+  });
+};
+
+/* ---------- Hardware (SIMULATED) ---------- */
+function logLines(lines) {
+  $('devLog').textContent += lines.map(l => new Date().toLocaleTimeString() + '  ' + l).join('\n') + '\n';
+}
+async function refreshDevices() {
+  const j = await api('/api/devices'), tb = $('devBody'); tb.textContent = '';
+  for (const d of j.devices) {
+    const tr = tb.insertRow();
+    [d.id, d.type, d.name, d.capabilities.join(', '), d.connected ? 'connected (simulated)' : 'disconnected']
+      .forEach(v => { tr.insertCell().textContent = v; });
+    const cell = tr.insertCell();
+    const add = (label, fn) => { const b = document.createElement('button'); b.className = 'act'; b.textContent = label; b.onclick = fn; cell.appendChild(b); };
+    add('Connect', () => connectDev(d.id, 0));
+    add('Connect (1 timeout)', () => connectDev(d.id, 1));
+    add('Connect (5 timeouts)', () => connectDev(d.id, 5));
+    add('Telemetry', () => run('Reading telemetry', async () => {
+      const t = await api('/api/devices/telemetry?id=' + encodeURIComponent(d.id)); logLines([JSON.stringify(t)]); return 'Telemetry received (SIMULATED)';
+    }));
+    add('Disconnect', () => run('Disconnecting', async () => {
+      await api('/api/devices/disconnect?id=' + encodeURIComponent(d.id), {method: 'POST'}); logLines(['disconnected ' + d.id]); await refreshDevices(); return 'Disconnected ' + d.id;
+    }));
+  }
+}
+function connectDev(id, inject) {
+  return run('Connecting ' + id, async () => {
+    const q = encodeURIComponent(id);
+    if (inject) await api('/api/devices/inject?id=' + q + '&n=' + inject, {method: 'POST'});
+    const j = await api('/api/devices/connect?id=' + q, {method: 'POST'});
+    logLines(j.log); await refreshDevices();
+    return j.connected ? 'Connected to ' + id + ' (SIMULATED)'
+                       : 'Could not connect to ' + id + ' after 3 attempts (SIMULATED timeout). The app is still responsive; try again.';
+  });
+}
+$('devRefresh').onclick = () => run('Discovering devices', async () => { await refreshDevices(); return 'Devices discovered (SIMULATED)'; });
+
+/* ---------- tabs ---------- */
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('section').forEach(s => { s.hidden = (s.id !== 'tab-' + b.dataset.tab); });
+  if (b.dataset.tab === 'geo') { stlView.render(); cloudView.render(); }
+  if (b.dataset.tab === 'hw') $('devRefresh').click();
+});
+stlView.render(); cloudView.render();
+</script>
+</body>
+</html>
